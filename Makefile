@@ -13,3 +13,4 @@ dump1090: dump1090.o anet.o
 
 clean:
 	rm -f *.o dump1090
+	
