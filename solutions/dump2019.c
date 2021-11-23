@@ -46,6 +46,25 @@
 #include "anet.h"
 #include "rtl-sdr.h"
 
+/* this lets the source compile without afl-clang-fast/lto */
+#ifndef __AFL_FUZZ_TESTCASE_LEN
+
+ssize_t fuzz_len;
+unsigned char fuzz_buf[1024000];
+
+#define __AFL_FUZZ_TESTCASE_LEN fuzz_len
+#define __AFL_FUZZ_TESTCASE_BUF fuzz_buf
+#define __AFL_FUZZ_INIT() void sync(void);
+#define __AFL_LOOP(x)                                                          \
+  ((fuzz_len = read(0, fuzz_buf, sizeof(fuzz_buf))) > 0 ? 1 : 0)
+#define __AFL_INIT() sync()
+
+#endif
+
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+__AFL_FUZZ_INIT();
+#endif
+
 #define MODES_DEFAULT_RATE 2000000
 #define MODES_DEFAULT_FREQ 1090000000
 #define MODES_DEFAULT_WIDTH 1000
@@ -2588,7 +2607,6 @@ int main(int argc, char **argv) {
   /* Set sane defaults. */
   modesInitConfig();
 
-  //#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   /* Parse the command line options */
   for (j = 1; j < argc; j++) {
     int more = j + 1 < argc; /* There are more arguments. */
@@ -2689,10 +2707,8 @@ int main(int argc, char **argv) {
   /* Setup for SIGWINCH for handling lines */
   if (Modes.interactive == 1)
     signal(SIGWINCH, sigWinchCallback);
-  //#endif
   /* Initialization */
   modesInit();
-  //#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   if (Modes.net_only) {
     fprintf(stderr, "Net-only mode, no RTL device or file open.\n");
   } else if (Modes.filename == NULL) {
@@ -2761,15 +2777,40 @@ int main(int argc, char **argv) {
 
     rtlsdr_close(Modes.dev);
   } else {
-    //Just parse a HEX formatted input
+
     struct client c;
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     FILE *fileptr = fdopen(Modes.fd, "r");
     while (fgets(c.buf, MODES_CLIENT_BUF_SIZE + 1, fileptr) != NULL) {
       c.buflen = strlen(c.buf);
       decodeHexMessage(&c);
     }
     fclose(fileptr);
+
+#else
+    // fuzzing main
+
+    ssize_t len;        /* how much input did we read? */
+    unsigned char *buf; /* test case buffer pointer    */
+
+    /* The number passed to __AFL_LOOP() controls the maximum number of
+       iterations before the loop exits and the program is allowed to
+       terminate normally. This limits the impact of accidental memory leaks
+       and similar hiccups. */
+#ifdef __AFL_HAVE_MANUAL_CONTROL
+    __AFL_INIT();
+#endif
+    buf = __AFL_FUZZ_TESTCASE_BUF; // this must be assigned before __AFL_LOOP!
+
+    while (__AFL_LOOP(10000)) {      // increase if you have good stability
+      len = __AFL_FUZZ_TESTCASE_LEN; // do not use the macro directly in a call!
+      if (len > MODES_CLIENT_BUF_SIZE)
+        len = MODES_CLIENT_BUF_SIZE;
+      memcpy(c.buf, buf, len);
+      decodeHexMessage(&c);
+    }
+#endif
   }
 
   return 0;
